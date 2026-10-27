@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <math.h>
 #include <mutex>
+#include <vector>
 
 //The size of the output array, with typical parameters around 300k 
 //floats are used
@@ -212,10 +213,11 @@ JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_bandcenters(JN
    }
    GaboratorState * state = reinterpret_cast<GaboratorState *>(stateMap[env_addresss]);
    
+   //max_band is the index of the lowpass band (the last band); band_ff() returns 0 for it
    int max_band = state->analyzerRef->bandpass_bands_end();
-   float band_centers[max_band+1];
+   std::vector<float> band_centers(max_band+1);
 
-   for(int i = 0 ; i < max_band ; i++){
+   for(int i = 0 ; i <= max_band ; i++){
       if(i<state->min_band){
          band_centers[i]=-1;
       }else{
@@ -224,7 +226,7 @@ JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_bandcenters(JN
    }
 
    jfloatArray outputArray = env->NewFloatArray(max_band+1);
-   env->SetFloatArrayRegion(outputArray, 0 , max_band+1, band_centers);  // copy
+   env->SetFloatArrayRegion(outputArray, 0 , max_band+1, band_centers.data());  // copy
    return outputArray;
 }
 
