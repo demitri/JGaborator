@@ -165,6 +165,7 @@ JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse(JNIEnv
    std::vector<float> buf(audio_block_c_array,audio_block_c_array + blocksize);
 
    int output_index = 0;
+   bool overflow = false;
    
    state->analyzerRef->analyze(buf.data(), state->t_in, state->t_in + blocksize, *(state->coefsRef));
    
@@ -177,6 +178,10 @@ JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse(JNIEnv
             [&](std::complex<float> coef, int band, int64_t audioSampleIndex ) {
                //ignores everything above the max_band
                if(band >= state->min_band){
+                  if(output_index + 3 > C_ARRAY_SIZE){
+                     overflow = true;
+                     return;
+                  }
                   //printf("%f %d %ld\n",std::abs(coef),band,audioSampleIndex);
                   state->cArray[output_index++] = band;
                   state->cArray[output_index++] = audioSampleIndex;
@@ -187,15 +192,21 @@ JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse(JNIEnv
             },st0,
             st1);
    
+   //Release audio block memory resources
+   env->ReleaseFloatArrayElements(audio_block, audio_block_c_array, 0);
+
+   if(overflow){
+      env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
+         "JGaborator: block produces more coefficients than C_ARRAY_SIZE; use a smaller block size");
+      return NULL;
+   }
+
    state->t_in += (int64_t) blocksize;
 
    int64_t t_out = state->t_in - state->anal_support;
    
    forget_before(*state->analyzerRef, *state->coefsRef, t_out - blocksize);
   
-   //Release audio block memory resources
-   env->ReleaseFloatArrayElements(audio_block, audio_block_c_array, 0);
-
    //copy the relevant part of the c array to the output JNI array
    jfloatArray outputArray = env->NewFloatArray(output_index);
    env->SetFloatArrayRegion(outputArray, 0 , output_index, state->cArray);
