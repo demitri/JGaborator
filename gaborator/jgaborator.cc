@@ -29,6 +29,17 @@ std::unordered_map<uintptr_t, uintptr_t> stateMap;
 //A mutex to ensure that writes to the stateMap are synchronized.
 std::mutex stateMutex;
 
+//Looks up the state for the calling thread while holding the lock.
+//Returns NULL if there is none. Never inserts.
+static GaboratorState * lookupState(JNIEnv * env){
+   std::lock_guard<std::mutex> lck(stateMutex);
+   auto it = stateMap.find(reinterpret_cast<uintptr_t>(env));
+   if(it == stateMap.end()){
+      return NULL;
+   }
+   return reinterpret_cast<GaboratorState *>(it->second);
+}
+
 //from here
 long get_thread_id(JNIEnv * env){
 
@@ -146,12 +157,10 @@ JNIEXPORT jint JNICALL Java_be_ugent_jgaborator_JGaborator_initialize(JNIEnv * e
 JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse(JNIEnv * env, jobject obj, jfloatArray audio_block ){
 
 	//get a ref to the state pointer
-   uintptr_t env_addresss = reinterpret_cast<uintptr_t>(env);
-   assert(stateMap.count(env_addresss)==1);
-   if(stateMap.count(env_addresss)==0){
+   GaboratorState * state = lookupState(env);
+   if(state == NULL){
       return NULL;
    }
-   GaboratorState * state = reinterpret_cast<GaboratorState *>(stateMap[env_addresss]);
 
    //get_thread_id(env);
    //printf("[C   ] address: %ld\n", env_addresss);
@@ -204,13 +213,10 @@ JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse(JNIEnv
 
 JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_bandcenters(JNIEnv * env, jobject obj){
 
-   uintptr_t env_addresss = reinterpret_cast<uintptr_t>(env);
-   assert(stateMap.count(env_addresss)==1);
-
-   if(stateMap.count(env_addresss)==0){
+   GaboratorState * state = lookupState(env);
+   if(state == NULL){
       return NULL;
    }
-   GaboratorState * state = reinterpret_cast<GaboratorState *>(stateMap[env_addresss]);
    
    int max_band = state->analyzerRef->bandpass_bands_end();
    float band_centers[max_band+1];
