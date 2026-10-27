@@ -23,9 +23,9 @@ JNIEXPORT jint JNICALL Java_be_ugent_jgaborator_JGaborator_initialize
 /*
  * Class:     be_ugent_jgaborator_JGaborator
  * Method:    analyse
- * Signature: ([F)[F
+ * Signature: ([F)[D
  */
-JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse
+JNIEXPORT jdoubleArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse
   (JNIEnv *, jobject, jfloatArray);
 
 JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_bandcenters

@@ -5,10 +5,6 @@
 #include <math.h>
 #include <mutex>
 
-//The size of the output array, with typical parameters around 300k 
-//floats are used
-const int C_ARRAY_SIZE = 300000 * 2;
-
 //A structure with the state information
 struct GaboratorState {   
 	gaborator::parameters* paramsRef;
@@ -19,15 +15,32 @@ struct GaboratorState {
 	int min_band;
 	int sample_rate;
 	int64_t anal_support;
-
-   jfloat *cArray;
 };
 
 //A hash map with a JNIEnv * as key and a GaboratorState * as value
 std::unordered_map<uintptr_t, uintptr_t> stateMap;
 
-//A mutex to ensure that writes to the stateMap are synchronized.
+//A mutex to ensure that all access to the stateMap is synchronized: a lookup
+//racing an insert (which may rehash) is undefined behaviour.
 std::mutex stateMutex;
+
+//Returns the state of the calling thread, or throws IllegalStateException (and
+//returns NULL) when this thread has none.
+static GaboratorState * lookup_state(JNIEnv * env){
+   GaboratorState * state = NULL;
+   {
+      std::lock_guard<std::mutex> lck (stateMutex);
+      auto it = stateMap.find(reinterpret_cast<uintptr_t>(env));
+      if(it != stateMap.end()){
+         state = reinterpret_cast<GaboratorState *>(it->second);
+      }
+   }
+   if(state == NULL){
+      env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
+         "jgaborator: no state for this thread (not initialized on it, or released)");
+   }
+   return state;
+}
 
 //from here
 long get_thread_id(JNIEnv * env){
@@ -126,7 +139,6 @@ JNIEXPORT jint JNICALL Java_be_ugent_jgaborator_JGaborator_initialize(JNIEnv * e
    state->min_band = total_bands - interesting_bands;
    state->sample_rate = (int) fs;
    state->t_in = 0;
-   state->cArray = new jfloat[C_ARRAY_SIZE];
 
    uintptr_t state_addresss = reinterpret_cast<uintptr_t>(state);
    assert(stateMap.count(env_addresss)==0);
@@ -141,17 +153,15 @@ JNIEXPORT jint JNICALL Java_be_ugent_jgaborator_JGaborator_initialize(JNIEnv * e
 /*
  * Class:     be_ugent_jgaborator_JGaborator
  * Method:    analyse
- * Signature: ([F)[F
+ * Signature: ([F)[D
  */
-JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse(JNIEnv * env, jobject obj, jfloatArray audio_block ){
+JNIEXPORT jdoubleArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse(JNIEnv * env, jobject obj, jfloatArray audio_block ){
 
 	//get a ref to the state pointer
-   uintptr_t env_addresss = reinterpret_cast<uintptr_t>(env);
-   assert(stateMap.count(env_addresss)==1);
-   if(stateMap.count(env_addresss)==0){
+   GaboratorState * state = lookup_state(env);
+   if(state == NULL){
       return NULL;
    }
-   GaboratorState * state = reinterpret_cast<GaboratorState *>(stateMap[env_addresss]);
 
    //get_thread_id(env);
    //printf("[C   ] address: %ld\n", env_addresss);
@@ -164,7 +174,9 @@ JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse(JNIEnv
 
    std::vector<float> buf(audio_block_c_array,audio_block_c_array + blocksize);
 
-   int output_index = 0;
+   //band, sample index, magnitude triples. Doubles, so that sample indexes stay
+   //exact past 2^24 samples (17.5 minutes at 16 kHz).
+   std::vector<jdouble> output;
    
    state->analyzerRef->analyze(buf.data(), state->t_in, state->t_in + blocksize, *(state->coefsRef));
    
@@ -178,9 +190,9 @@ JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse(JNIEnv
                //ignores everything above the max_band
                if(band >= state->min_band){
                   //printf("%f %d %ld\n",std::abs(coef),band,audioSampleIndex);
-                  state->cArray[output_index++] = band;
-                  state->cArray[output_index++] = audioSampleIndex;
-                  state->cArray[output_index++] = std::abs(coef);
+                  output.push_back(band);
+                  output.push_back(audioSampleIndex);
+                  output.push_back(std::abs(coef));
                   //printf("output_index:  %d\n", output_index++);
                   //output_index++;
                }
@@ -197,23 +209,23 @@ JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_analyse(JNIEnv
    env->ReleaseFloatArrayElements(audio_block, audio_block_c_array, 0);
 
    //copy the relevant part of the c array to the output JNI array
-   jfloatArray outputArray = env->NewFloatArray(output_index);
-   env->SetFloatArrayRegion(outputArray, 0 , output_index, state->cArray);
+   jdoubleArray outputArray = env->NewDoubleArray(output.size());
+   if(outputArray == NULL) return NULL;
+   env->SetDoubleArrayRegion(outputArray, 0 , output.size(), output.data());
    return outputArray;
 }
 
 JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_bandcenters(JNIEnv * env, jobject obj){
 
-   uintptr_t env_addresss = reinterpret_cast<uintptr_t>(env);
-   assert(stateMap.count(env_addresss)==1);
-
-   if(stateMap.count(env_addresss)==0){
+   GaboratorState * state = lookup_state(env);
+   if(state == NULL){
       return NULL;
    }
-   GaboratorState * state = reinterpret_cast<GaboratorState *>(stateMap[env_addresss]);
    
+   //One entry per bandpass band. (This used to copy max_band+1 entries with the
+   //last never written, so its stack garbage was counted as a band when positive.)
    int max_band = state->analyzerRef->bandpass_bands_end();
-   float band_centers[max_band+1];
+   std::vector<float> band_centers(max_band);
 
    for(int i = 0 ; i < max_band ; i++){
       if(i<state->min_band){
@@ -223,8 +235,9 @@ JNIEXPORT jfloatArray JNICALL Java_be_ugent_jgaborator_JGaborator_bandcenters(JN
       }
    }
 
-   jfloatArray outputArray = env->NewFloatArray(max_band+1);
-   env->SetFloatArrayRegion(outputArray, 0 , max_band+1, band_centers);  // copy
+   jfloatArray outputArray = env->NewFloatArray(max_band);
+   if(outputArray == NULL) return NULL;
+   env->SetFloatArrayRegion(outputArray, 0 , max_band, band_centers.data());  // copy
    return outputArray;
 }
 
@@ -252,7 +265,6 @@ JNIEXPORT void JNICALL Java_be_ugent_jgaborator_JGaborator_release(JNIEnv *env ,
 	delete state->analyzerRef;
 	delete state->coefsRef;
 	delete state->paramsRef;
-   delete [] state->cArray;
 
 	delete state;
 }

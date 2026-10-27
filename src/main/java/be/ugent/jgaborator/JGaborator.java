@@ -104,7 +104,7 @@ public class JGaborator implements AudioProcessor{
 	}
 
 	// Analyze a block of audio and get constant-q transform of previous blocks
-	private native float[] analyse(float[] block);
+	private native double[] analyse(float[] block);
 
 	// Return the center frequencies in Hz for each band
 	private native float[] bandcenters();
@@ -151,10 +151,10 @@ public class JGaborator implements AudioProcessor{
 	private synchronized void gaborTransform(float[] audioData) {
 		// Analyze an audio block
 		//System.out.println("Before analyse " + Thread.currentThread());
-		float[] analysisResult = analyse(audioData);
+		double[] analysisResult = analyse(audioData);
 		//System.out.println("After analyse");
 
-		//The analysis result consists of a float array with three values:
+		//The analysis result consists of a double array with three values:
 		// a frequency band index [i] (always an integer)
 		// an audio sample index [i+1] (expressed in audio samples)
 		// a magnitude value [i+2] (the magnitude value)
@@ -163,7 +163,7 @@ public class JGaborator implements AudioProcessor{
 			int band = (int) analysisResult[i];
 			int audioSample = (int) analysisResult[i + 1];
 			
-			float coeficcient = analysisResult[i + 2];
+			float coeficcient = (float) analysisResult[i + 2];
 
 			int coefficientIndex = audioSample / frequencyBinTimeStepSize - coefficientIndexOffset;
 			int bandIndex = band - firstBandCache;
